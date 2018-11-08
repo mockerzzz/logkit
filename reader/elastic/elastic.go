@@ -24,6 +24,7 @@ import (
 
 	"github.com/qiniu/logkit/conf"
 	"github.com/qiniu/logkit/reader"
+	. "github.com/qiniu/logkit/reader/config"
 	"github.com/qiniu/logkit/utils"
 	. "github.com/qiniu/logkit/utils/models"
 )
@@ -84,30 +85,30 @@ type Reader struct {
 }
 
 func init() {
-	reader.RegisterConstructor(reader.ModeElastic, NewReader)
+	reader.RegisterConstructor(ModeElastic, NewReader)
 }
 
 func NewReader(meta *reader.Meta, conf conf.MapConf) (reader.Reader, error) {
-	readBatch, _ := conf.GetIntOr(reader.KeyESReadBatch, 100)
-	estype, err := conf.GetString(reader.KeyESType)
+	readBatch, _ := conf.GetIntOr(KeyESReadBatch, 100)
+	estype, err := conf.GetString(KeyESType)
 	if err != nil {
 		return nil, err
 	}
-	esindex, err := conf.GetString(reader.KeyESIndex)
+	esindex, err := conf.GetString(KeyESIndex)
 	if err != nil {
 		return nil, err
 	}
-	eshost, _ := conf.GetStringOr(reader.KeyESHost, "http://localhost:9200")
+	eshost, _ := conf.GetStringOr(KeyESHost, "http://localhost:9200")
 	if !strings.HasPrefix(eshost, "http://") && !strings.HasPrefix(eshost, "https://") {
 		eshost = "http://" + eshost
 	}
-	esVersion, _ := conf.GetStringOr(reader.KeyESVersion, reader.ElasticVersion5)
-	authUsername, _ := conf.GetStringOr(reader.KeyAuthUsername, "")
-	authPassword, _ := conf.GetPasswordEnvStringOr(reader.KeyAuthPassword, "")
-	keepAlive, _ := conf.GetStringOr(reader.KeyESKeepAlive, "6h")
-	cronSched, _ := conf.GetStringOr(reader.KeyESCron, "")
-	execOnStart, _ := conf.GetBoolOr(reader.KeyESExecOnstart, true)
-	cronOffset, _ := conf.GetStringOr(reader.KeyESCronOffset, "")
+	esVersion, _ := conf.GetStringOr(KeyESVersion, ElasticVersion5)
+	authUsername, _ := conf.GetStringOr(KeyAuthUsername, "")
+	authPassword, _ := conf.GetPasswordEnvStringOr(KeyAuthPassword, "")
+	keepAlive, _ := conf.GetStringOr(KeyESKeepAlive, "6h")
+	cronSched, _ := conf.GetStringOr(KeyESCron, "")
+	execOnStart, _ := conf.GetBoolOr(KeyESExecOnstart, true)
+	cronOffset, _ := conf.GetStringOr(KeyESCronOffset, "")
 	metaFile := filepath.Join(meta.Dir, KeyMetaFileName)
 
 	offset, _, err := meta.ReadOffset()
@@ -116,8 +117,8 @@ func NewReader(meta *reader.Meta, conf conf.MapConf) (reader.Reader, error) {
 	}
 	r := &Reader{
 		meta:          meta,
-		status:        reader.StatusInit,
-		routineStatus: reader.StatusInit,
+		status:        StatusInit,
+		routineStatus: StatusInit,
 		stopChan:      make(chan struct{}),
 		readChan:      make(chan Record),
 		errChan:       make(chan error),
@@ -138,7 +139,7 @@ func NewReader(meta *reader.Meta, conf conf.MapConf) (reader.Reader, error) {
 	}
 	if len(cronSched) > 0 {
 		cronSched = strings.ToLower(cronSched)
-		if strings.HasPrefix(cronSched, reader.Loop) {
+		if strings.HasPrefix(cronSched, Loop) {
 			r.isLoop = true
 			r.loopDuration, err = reader.ParseLoopDuration(cronSched)
 			if err != nil {
@@ -150,7 +151,7 @@ func NewReader(meta *reader.Meta, conf conf.MapConf) (reader.Reader, error) {
 			if utils.IsExist(metaFile) {
 				content, err := ioutil.ReadFile(metaFile)
 				if err != nil {
-					log.Warnf("Runner[%v] %v failed to read offset file[%v]: %v,reset offset and read all data", meta.RunnerName, reader.ModeElastic, metaFile, err)
+					log.Warnf("Runner[%v] %v failed to read offset file[%v]: %v,reset offset and read all data", meta.RunnerName, ModeElastic, metaFile, err)
 				} else {
 					r.cronOffsetValue = string(content)
 					r.cronOffsetValueIsValid = true
@@ -168,11 +169,11 @@ func NewReader(meta *reader.Meta, conf conf.MapConf) (reader.Reader, error) {
 }
 
 func (r *Reader) isStopping() bool {
-	return atomic.LoadInt32(&r.status) == reader.StatusStopping
+	return atomic.LoadInt32(&r.status) == StatusStopping
 }
 
 func (r *Reader) hasStopped() bool {
-	return atomic.LoadInt32(&r.status) == reader.StatusStopped
+	return atomic.LoadInt32(&r.status) == StatusStopped
 }
 
 func (r *Reader) Name() string {
@@ -181,7 +182,7 @@ func (r *Reader) Name() string {
 
 func (r *Reader) run() {
 	// 未在准备状态（StatusInit）时无法执行此次任务
-	if !atomic.CompareAndSwapInt32(&r.routineStatus, reader.StatusInit, reader.StatusRunning) {
+	if !atomic.CompareAndSwapInt32(&r.routineStatus, StatusInit, StatusRunning) {
 		if r.isStopping() || r.hasStopped() {
 			log.Warnf("Runner[%v] %q daemon has stopped, this task does not need to be executed and is skipped this time", r.meta.RunnerName, r.Name())
 		} else {
@@ -197,13 +198,13 @@ func (r *Reader) run() {
 	defer func() {
 		// 如果 reader 在 routine 运行时关闭，则需要此 routine 负责关闭数据管道
 		if r.isStopping() || r.hasStopped() {
-			if atomic.CompareAndSwapInt32(&r.routineStatus, reader.StatusRunning, reader.StatusStopping) {
+			if atomic.CompareAndSwapInt32(&r.routineStatus, StatusRunning, StatusStopping) {
 				close(r.readChan)
 				close(r.errChan)
 			}
 			return
 		}
-		atomic.StoreInt32(&r.routineStatus, reader.StatusInit)
+		atomic.StoreInt32(&r.routineStatus, StatusInit)
 	}()
 
 	// 判断上层是否已经关闭，先判断 routineStatus 再判断 status 可以保证同时只有一个 r.run 会运行到此处
@@ -252,7 +253,7 @@ func (r *Reader) sendError(err error) {
 func (r *Reader) execWithLoop() error {
 	// Create a client
 	switch r.esVersion {
-	case reader.ElasticVersion6:
+	case ElasticVersion6:
 		optFns := []elasticV6.ClientOptionFunc{
 			elasticV6.SetURL(r.eshost),
 		}
@@ -286,7 +287,7 @@ func (r *Reader) execWithLoop() error {
 				return nil
 			}
 		}
-	case reader.ElasticVersion3:
+	case ElasticVersion3:
 		optFns := []elasticV3.ClientOptionFunc{
 			elasticV3.SetURL(r.eshost),
 		}
@@ -359,7 +360,7 @@ func (r *Reader) execWithLoop() error {
 func (r *Reader) execWithCron() error {
 	// Create a client
 	switch r.esVersion {
-	case reader.ElasticVersion6:
+	case ElasticVersion6:
 		optFns := []elasticV6.ClientOptionFunc{
 			elasticV6.SetURL(r.eshost),
 		}
@@ -402,7 +403,7 @@ func (r *Reader) execWithCron() error {
 				return nil
 			}
 		}
-	case reader.ElasticVersion3:
+	case ElasticVersion3:
 		optFns := []elasticV3.ClientOptionFunc{
 			elasticV3.SetURL(r.eshost),
 		}
@@ -493,7 +494,7 @@ func (r *Reader) execWithCron() error {
 func (r *Reader) Start() error {
 	if r.isStopping() || r.hasStopped() {
 		return errors.New("reader is stopping or has stopped")
-	} else if !atomic.CompareAndSwapInt32(&r.status, reader.StatusInit, reader.StatusRunning) {
+	} else if !atomic.CompareAndSwapInt32(&r.status, StatusInit, StatusRunning) {
 		log.Warnf("Runner[%v] %q daemon has already started and is running", r.meta.RunnerName, r.Name())
 		return nil
 	}
@@ -507,7 +508,7 @@ func (r *Reader) Start() error {
 
 				select {
 				case <-r.stopChan:
-					atomic.StoreInt32(&r.status, reader.StatusStopped)
+					atomic.StoreInt32(&r.status, StatusStopped)
 					log.Infof("Runner[%v] %q daemon has stopped from running", r.meta.RunnerName, r.Name())
 					return
 				case <-ticker.C:
@@ -575,7 +576,7 @@ func (r *Reader) SyncMeta() {
 }
 
 func (r *Reader) Close() error {
-	if !atomic.CompareAndSwapInt32(&r.status, reader.StatusRunning, reader.StatusStopping) {
+	if !atomic.CompareAndSwapInt32(&r.status, StatusRunning, StatusStopping) {
 		log.Warnf("Runner[%v] reader %q is not running, close operation ignored", r.meta.RunnerName, r.Name())
 		return nil
 	}
@@ -583,7 +584,7 @@ func (r *Reader) Close() error {
 	close(r.stopChan)
 
 	// 如果此时没有 routine 正在运行，则在此处关闭数据管道，否则由 routine 在退出时负责关闭
-	if atomic.CompareAndSwapInt32(&r.routineStatus, reader.StatusInit, reader.StatusStopping) {
+	if atomic.CompareAndSwapInt32(&r.routineStatus, StatusInit, StatusStopping) {
 		close(r.readChan)
 		close(r.errChan)
 	}

@@ -16,6 +16,7 @@ import (
 	"github.com/qiniu/log"
 
 	"github.com/qiniu/logkit/rateio"
+	"github.com/qiniu/logkit/reader/config"
 	. "github.com/qiniu/logkit/utils/models"
 	utilsos "github.com/qiniu/logkit/utils/os"
 )
@@ -76,9 +77,9 @@ func getStartFile(path, whence string, meta *Meta, sf *SeqFile) (f *os.File, dir
 	currFile, offset, err = meta.ReadOffset()
 	if err != nil {
 		switch whence {
-		case WhenceOldest:
+		case config.WhenceOldest:
 			currFile, offset, err = oldestFile(dir, sf.getIgnoreCondition())
-		case WhenceNewest:
+		case config.WhenceNewest:
 			currFile, offset, err = newestFile(dir, sf.getIgnoreCondition())
 		default:
 			err = errors.New("reader_whence parameter does not support: " + whence)
@@ -590,8 +591,12 @@ func (sf *SeqFile) Lag() (rl *LagInfo, err error) {
 	if err != nil {
 		return rl, fmt.Errorf("ReadDirByTime err %v, can't get stats", err)
 	}
+	condition := sf.getIgnoreCondition()
 	for _, l := range logs {
 		if l.IsDir() {
+			continue
+		}
+		if condition == nil || !condition(l) {
 			continue
 		}
 		rl.Size += l.Size()

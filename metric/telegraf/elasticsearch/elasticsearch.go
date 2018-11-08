@@ -2,6 +2,7 @@ package elasticsearch
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -20,6 +21,7 @@ const MetricName = "elasticsearch"
 var (
 	ConfigServers            = "servers"
 	ConfigLocal              = "local"
+	ConfigTimeout            = "timeout"
 	ConfigClusterHealth      = "cluster_health"
 	ConfigClusterHealthLevel = "cluster_health_level"
 	ConfigClusterStats       = "cluster_stats"
@@ -59,6 +61,13 @@ func init() {
 				DefaultNoUse:  false,
 				Description:   "只读取本节点的状态信息",
 				Type:          metric.ConfigTypeBool,
+			},
+			{
+				KeyName:      ConfigTimeout,
+				Default:      "5s",
+				DefaultNoUse: false,
+				Description:  "请求超时时间",
+				Type:         metric.ConfigTypeBool,
 			},
 			{
 				KeyName:       ConfigClusterHealth,
@@ -156,17 +165,43 @@ func (c *collector) SyncConfig(data map[string]interface{}, meta *reader.Meta) e
 		return errors.New("unexpected elasticsearch type, want '*elasticsearch.Elasticsearch'")
 	}
 	servers, ok := data[ConfigServers].(string)
-	if ok {
-		es.Servers = strings.Split(servers, ",")
+	if !ok {
+		return fmt.Errorf("key servers want as string,actual get %T\n", data[ConfigServers])
 	}
-	es.Local = data[ConfigLocal].(bool)
-	es.ClusterHealth = data[ConfigClusterHealth].(bool)
-	es.ClusterHealthLevel = data[ConfigClusterHealthLevel].(string)
-	es.ClusterStats = data[ConfigClusterStats].(bool)
-	es.InsecureSkipVerify = data[ConfigInsecureSkipVerify].(bool)
-	es.TLSCA = data[ConfigTLSCA].(string)
-	es.TLSCert = data[ConfigTLSCert].(string)
-	es.TLSKey = data[ConfigTLSKey].(string)
+	es.Servers = strings.Split(servers, ",")
+
+	local, ok := data[ConfigLocal].(bool)
+	if ok {
+		es.Local = local
+	}
+	health, ok := data[ConfigClusterHealth].(bool)
+	if ok {
+		es.ClusterHealth = health
+	}
+	healthLevel, ok := data[ConfigClusterHealthLevel].(string)
+	if ok {
+		es.ClusterHealthLevel = strings.TrimSpace(healthLevel)
+	}
+	ClusterStats, ok := data[ConfigClusterStats].(bool)
+	if ok {
+		es.ClusterStats = ClusterStats
+	}
+	InsecureSkipVerify, ok := data[ConfigInsecureSkipVerify].(bool)
+	if ok {
+		es.InsecureSkipVerify = InsecureSkipVerify
+	}
+	TLSCA, ok := data[ConfigTLSCA].(string)
+	if ok {
+		es.TLSCA = TLSCA
+	}
+	TLSCert, ok := data[ConfigTLSCert].(string)
+	if ok {
+		es.TLSCert = TLSCert
+	}
+	TLSKey, ok := data[ConfigTLSKey].(string)
+	if ok {
+		es.TLSKey = TLSKey
+	}
 	return nil
 }
 

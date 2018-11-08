@@ -1,10 +1,11 @@
-package sender
+package config
 
 import (
 	"strconv"
 
-	. "github.com/qiniu/logkit/utils/models"
 	"github.com/qiniu/pandora-go-sdk/base/config"
+
+	. "github.com/qiniu/logkit/utils/models"
 )
 
 // ModeUsages 用途说明
@@ -59,16 +60,6 @@ var (
 		Advance:       true,
 		ToolTip:       `默认不丢弃，设置此选项后会丢弃发送错误的数据，仅在数据只有一条时才会丢弃，多余一条会不断二分。`,
 	}
-	OptionFtProcs = Option{
-		KeyName:      KeyFtProcs,
-		ChooseOnly:   false,
-		Default:      "",
-		DefaultNoUse: false,
-		Description:  "发送并发数量(ft_procs)",
-		CheckRegex:   "\\d+",
-		Advance:      true,
-		ToolTip:      "并发仅在ft_strateg模式选择 always_save或concurrent 时生效",
-	}
 	OptionFtMemoryChannel = Option{
 		KeyName:       KeyFtMemoryChannel,
 		Element:       Radio,
@@ -105,7 +96,7 @@ var (
 	OptionMaxDiskUsedBytes = Option{
 		KeyName:      KeyMaxDiskUsedBytes,
 		ChooseOnly:   false,
-		Default:      strconv.Itoa(maxDiskUsedBytes),
+		Default:      strconv.Itoa(MaxDiskUsedBytes),
 		DefaultNoUse: false,
 		Description:  "磁盘使用总大小限制(max_disk_used_bytes)",
 		Advance:      true,
@@ -114,7 +105,7 @@ var (
 	OptionMaxSizePerSize = Option{
 		KeyName:      KeyMaxSizePerFile,
 		ChooseOnly:   false,
-		Default:      strconv.Itoa(maxBytesPerFile),
+		Default:      strconv.Itoa(MaxBytesPerFile),
 		DefaultNoUse: false,
 		Description:  "磁盘队列单个文件最大字节(max_size_per_file)",
 		Advance:      true,
@@ -541,7 +532,6 @@ var ModeKeyOptions = map[string][]Option{
 		OptionFtWriteLimit,
 		OptionFtStrategy,
 		OptionFtDiscardErr,
-		OptionFtProcs,
 		OptionFtMemoryChannel,
 		OptionFtMemoryChannelSize,
 		OptionKeyFtLongDataDiscard,
@@ -623,6 +613,16 @@ var ModeKeyOptions = map[string][]Option{
 			Advance:       true,
 			ToolTip:       `对于https等情况不对证书和安全性检验`,
 		},
+		{
+			KeyName:      KeyTimeout,
+			ChooseOnly:   false,
+			Default:      "30s",
+			DefaultNoUse: false,
+			Description:  "发送数据超时时间(pandora_send_timeout)",
+			Advance:      true,
+			CheckRegex:   "\\d+[hms]",
+			ToolTip:      `设置发送数据超时时间，写法为：数字加单位符号，支持时h、分m、秒s为单位，例如3h(3小时)、10m(10分钟)、5s(5秒)，默认的timeout时间是30s，当timeout时间为0s时表示永不超时`,
+		},
 	},
 	TypeMongodbAccumulate: {
 		{
@@ -675,7 +675,6 @@ var ModeKeyOptions = map[string][]Option{
 		OptionFtWriteLimit,
 		OptionFtStrategy,
 		OptionFtDiscardErr,
-		OptionFtProcs,
 		OptionFtMemoryChannel,
 		OptionFtMemoryChannelSize,
 		OptionKeyFtLongDataDiscard,
@@ -782,7 +781,6 @@ var ModeKeyOptions = map[string][]Option{
 		OptionFtWriteLimit,
 		OptionFtStrategy,
 		OptionFtDiscardErr,
-		OptionFtProcs,
 		OptionFtMemoryChannel,
 		OptionFtMemoryChannelSize,
 		OptionKeyFtLongDataDiscard,
@@ -851,7 +849,6 @@ var ModeKeyOptions = map[string][]Option{
 		OptionFtWriteLimit,
 		OptionFtStrategy,
 		OptionFtDiscardErr,
-		OptionFtProcs,
 		OptionFtMemoryChannel,
 		OptionFtMemoryChannelSize,
 		OptionKeyFtLongDataDiscard,
@@ -933,7 +930,6 @@ var ModeKeyOptions = map[string][]Option{
 		OptionFtWriteLimit,
 		OptionFtStrategy,
 		OptionFtDiscardErr,
-		OptionFtProcs,
 		OptionFtMemoryChannel,
 		OptionFtMemoryChannelSize,
 		OptionKeyFtLongDataDiscard,
@@ -959,6 +955,30 @@ var ModeKeyOptions = map[string][]Option{
 			ToolTip:       `使用raw格式发送时，需使用raw解析方式，发送时将raw字段的值取出作为http body发送`,
 		},
 		{
+			KeyName:      KeyHttpSenderTemplate,
+			Element:      Text,
+			ChooseOnly:   false,
+			Default:      "",
+			Placeholder:  `{"a": "{{key1}}", "b": "{{key2}}"}`,
+			Required:     false,
+			DefaultNoUse: true,
+			Description:  "自定义数据模板(http_sender_template)",
+			ToolTip:      `渲染自定义的数据模板，使用"{{key}}"作为占位符，key为需要发送的字段名，渲染后为该字段的值。目前仅支持json和body_json两种数据格式`,
+			Advance:      true,
+		},
+		{
+			KeyName:      KeyHttpSenderTemplate,
+			Element:      Text,
+			ChooseOnly:   false,
+			Default:      "",
+			Placeholder:  `{"a": "{{key1}}", "b": "{{key2}}"}`,
+			Required:     false,
+			DefaultNoUse: true,
+			Description:  "自定义数据模板(http_sender_template)",
+			ToolTip:      `渲染自定义的数据模板，使用"{{key}}"作为占位符，key为需要发送的字段名，渲染后为该字段的值。目前仅支持json和body_json两种数据格式`,
+			Advance:      true,
+		},
+		{
 			KeyName:      KeyHttpSenderCsvSplit,
 			ChooseOnly:   false,
 			Default:      "",
@@ -972,7 +992,7 @@ var ModeKeyOptions = map[string][]Option{
 			Element:       Radio,
 			ChooseOnly:    true,
 			ChooseOptions: []interface{}{"true", "false"},
-			Default:       "true",
+			Default:       "false",
 			DefaultNoUse:  true,
 			Description:   "是否启用gzip(http_sender_gzip)",
 		},
@@ -986,7 +1006,6 @@ var ModeKeyOptions = map[string][]Option{
 		OptionFtWriteLimit,
 		OptionFtStrategy,
 		OptionFtDiscardErr,
-		OptionFtProcs,
 		OptionFtMemoryChannel,
 		OptionFtMemoryChannelSize,
 		OptionKeyFtLongDataDiscard,

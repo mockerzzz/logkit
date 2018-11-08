@@ -18,8 +18,11 @@ import (
 
 	"github.com/qiniu/log"
 
+	"regexp"
+
 	"github.com/qiniu/logkit/conf"
 	"github.com/qiniu/logkit/reader"
+	. "github.com/qiniu/logkit/reader/config"
 	. "github.com/qiniu/logkit/utils/models"
 )
 
@@ -44,7 +47,7 @@ func (ssr *streamSocketReader) listen() {
 	ssr.connections = map[string]net.Conn{}
 
 	defer func() {
-		if atomic.CompareAndSwapInt32(&ssr.status, reader.StatusStopping, reader.StatusStopped) {
+		if atomic.CompareAndSwapInt32(&ssr.status, StatusStopping, StatusStopped) {
 			close(ssr.readChan)
 			close(ssr.errChan)
 		}
@@ -113,13 +116,14 @@ func (ssr *streamSocketReader) read(c net.Conn) {
 	defer c.Close()
 
 	if ssr.IsSplitByLine ||
-		ssr.SocketRule == reader.SocketRuleLine ||
-		ssr.SocketRule == reader.SocketRulePacket {
+		ssr.SocketRule == SocketRuleLine ||
+		ssr.SocketRule == SocketRulePacket {
 		ssr.packetAndLineRead(c)
+	} else if ssr.SocketRule == SocketRuleHeadPattern {
+		// 后续要加
 	} else {
 		ssr.jsonRead(c)
 	}
-
 	return
 }
 
@@ -128,7 +132,7 @@ func (ssr *streamSocketReader) packetAndLineRead(c net.Conn) {
 	defer ssr.sendError(err)
 	scnr := bufio.NewScanner(c)
 	for {
-		if atomic.LoadInt32(&ssr.status) == reader.StatusStopped || atomic.LoadInt32(&ssr.status) == reader.StatusStopping {
+		if atomic.LoadInt32(&ssr.status) == StatusStopped || atomic.LoadInt32(&ssr.status) == StatusStopping {
 			return
 		}
 		if ssr.ReadTimeout != 0 && ssr.ReadTimeout > 0 {
@@ -139,7 +143,7 @@ func (ssr *streamSocketReader) packetAndLineRead(c net.Conn) {
 		}
 
 		//double check
-		if atomic.LoadInt32(&ssr.status) == reader.StatusStopped || atomic.LoadInt32(&ssr.status) == reader.StatusStopping {
+		if atomic.LoadInt32(&ssr.status) == StatusStopped || atomic.LoadInt32(&ssr.status) == StatusStopping {
 			return
 		}
 
@@ -156,7 +160,7 @@ func (ssr *streamSocketReader) packetAndLineRead(c net.Conn) {
 		}
 
 		val := string(scnr.Bytes())
-		if ssr.IsSplitByLine || ssr.SocketRule == reader.SocketRuleLine {
+		if ssr.IsSplitByLine || ssr.SocketRule == SocketRuleLine {
 			vals := strings.Split(val, "\n")
 			for _, value := range vals {
 				if value = strings.TrimSpace(value); value != "" {
@@ -177,7 +181,7 @@ func (ssr *streamSocketReader) packetAndLineRead(c net.Conn) {
 			//可能reader都已经close了，channel也关了，直接return
 			return
 		}
-		if atomic.LoadInt32(&ssr.status) == reader.StatusStopped || atomic.LoadInt32(&ssr.status) == reader.StatusStopping {
+		if atomic.LoadInt32(&ssr.status) == StatusStopped || atomic.LoadInt32(&ssr.status) == StatusStopping {
 			return
 		}
 	}
@@ -190,7 +194,7 @@ func (ssr *streamSocketReader) jsonRead(c net.Conn) {
 	decoder := json.NewDecoder(bufioReader)
 
 	for {
-		if atomic.LoadInt32(&ssr.status) == reader.StatusStopped || atomic.LoadInt32(&ssr.status) == reader.StatusStopping {
+		if atomic.LoadInt32(&ssr.status) == StatusStopped || atomic.LoadInt32(&ssr.status) == StatusStopping {
 			return
 		}
 		if ssr.ReadTimeout != 0 && ssr.ReadTimeout > 0 {
@@ -198,7 +202,7 @@ func (ssr *streamSocketReader) jsonRead(c net.Conn) {
 		}
 
 		//double check
-		if atomic.LoadInt32(&ssr.status) == reader.StatusStopped || atomic.LoadInt32(&ssr.status) == reader.StatusStopping {
+		if atomic.LoadInt32(&ssr.status) == StatusStopped || atomic.LoadInt32(&ssr.status) == StatusStopping {
 			return
 		}
 
@@ -216,20 +220,19 @@ func (ssr *streamSocketReader) jsonRead(c net.Conn) {
 
 		var res interface{}
 		err = decoder.Decode(&res)
-		if _, ok := err.(*json.SyntaxError); ok {
-			bufferReader := decoder.Buffered()
-			readBytes, err := ioutil.ReadAll(bufferReader)
-			if err != nil {
-				log.Errorf("runner[%v] Reader %q read decoder buffered error: %v", ssr.meta.RunnerName, ssr.Name(), err)
-			} else {
-				log.Errorf("runner[%v] Reader %q read streaming message: %v", ssr.meta.RunnerName, ssr.Name(), TruncateStrSize(string(readBytes), 2048))
-			}
-			decoder = json.NewDecoder(bufioReader)
-			log.Errorf("runner[%v] Reader %q decode message error %v", ssr.meta.RunnerName, ssr.Name(), err)
-			time.Sleep(time.Second)
-			continue
-		}
 		if err != nil {
+			if _, ok := err.(*json.SyntaxError); ok {
+				bufferReader := decoder.Buffered()
+				readBytes, err := ioutil.ReadAll(bufferReader)
+				if err != nil {
+					log.Errorf("runner[%v] Reader %q read decoder buffered error: %v", ssr.meta.RunnerName, ssr.Name(), err)
+				} else {
+					log.Infof("runner[%v] Reader %q read streaming message:{ %v }, will combine it to next json decoder", ssr.meta.RunnerName, ssr.Name(), TruncateStrSize(string(readBytes), 2048))
+				}
+				decoder = json.NewDecoder(bufioReader)
+				time.Sleep(time.Second)
+				continue
+			}
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				if !tryDecodeReader(decoder) {
 					decoder = json.NewDecoder(bufioReader)
@@ -259,14 +262,14 @@ func (psr *packetSocketReader) listen() {
 	buf := make([]byte, 64*1024) // 64kb - maximum size of IP packet
 
 	defer func() {
-		if atomic.CompareAndSwapInt32(&psr.status, reader.StatusStopping, reader.StatusStopped) {
+		if atomic.CompareAndSwapInt32(&psr.status, StatusStopping, StatusStopped) {
 			close(psr.readChan)
 			close(psr.errChan)
 		}
 	}()
 
 	for {
-		if atomic.LoadInt32(&psr.status) == reader.StatusStopped || atomic.LoadInt32(&psr.status) == reader.StatusStopping {
+		if atomic.LoadInt32(&psr.status) == StatusStopped || atomic.LoadInt32(&psr.status) == StatusStopping {
 			return
 		}
 		n, remoteAddr, err := psr.PacketConn.ReadFrom(buf)
@@ -278,7 +281,7 @@ func (psr *packetSocketReader) listen() {
 			break
 		}
 		// double check
-		if atomic.LoadInt32(&psr.status) == reader.StatusStopped || atomic.LoadInt32(&psr.status) == reader.StatusStopping {
+		if atomic.LoadInt32(&psr.status) == StatusStopped || atomic.LoadInt32(&psr.status) == StatusStopping {
 			return
 		}
 
@@ -295,7 +298,7 @@ func (psr *packetSocketReader) listen() {
 		}
 		val := string(buf[:n])
 
-		if psr.IsSplitByLine || psr.SocketRule == reader.SocketRuleLine {
+		if psr.IsSplitByLine || psr.SocketRule == SocketRuleLine {
 			vals := strings.Split(val, "\n")
 			for _, value := range vals {
 				if value = strings.TrimSpace(value); value != "" {
@@ -309,7 +312,7 @@ func (psr *packetSocketReader) listen() {
 }
 
 func init() {
-	reader.RegisterConstructor(reader.ModeSocket, NewReader)
+	reader.RegisterConstructor(ModeSocket, NewReader)
 }
 
 type Reader struct {
@@ -329,34 +332,44 @@ type Reader struct {
 	KeepAlivePeriod time.Duration
 	IsSplitByLine   bool
 	SocketRule      string
+	HeadPattern     *regexp.Regexp
 
 	closer io.Closer
 }
 
 func NewReader(meta *reader.Meta, conf conf.MapConf) (reader.Reader, error) {
-	ServiceAddress, err := conf.GetString(reader.KeySocketServiceAddress)
+	ServiceAddress, err := conf.GetString(KeySocketServiceAddress)
 	if err != nil {
 		return nil, err
 	}
 
-	MaxConnections, _ := conf.GetIntOr(reader.KeySocketMaxConnections, 0)
-	ReadTimeout, _ := conf.GetStringOr(reader.KeySocketReadTimeout, "0")
+	MaxConnections, _ := conf.GetIntOr(KeySocketMaxConnections, 0)
+	ReadTimeout, _ := conf.GetStringOr(KeySocketReadTimeout, "0")
 	ReadTimeoutdur, err := time.ParseDuration(ReadTimeout)
 	if err != nil {
 		return nil, err
 	}
-	ReadBufferSize, _ := conf.GetIntOr(reader.KeySocketReadBufferSize, 65535)
+	ReadBufferSize, _ := conf.GetIntOr(KeySocketReadBufferSize, 65535)
 
-	KeepAlivePeriod, _ := conf.GetStringOr(reader.KeySocketKeepAlivePeriod, "5m")
+	KeepAlivePeriod, _ := conf.GetStringOr(KeySocketKeepAlivePeriod, "5m")
 	KeepAlivePeriodDur, err := time.ParseDuration(KeepAlivePeriod)
 	if err != nil {
 		return nil, err
 	}
-	IsSplitByLine, _ := conf.GetBoolOr(reader.KeySocketSplitByLine, false)
-	socketRule, _ := conf.GetStringOr(reader.KeySocketRule, reader.SocketRulePacket)
+	IsSplitByLine, _ := conf.GetBoolOr(KeySocketSplitByLine, false)
+	socketRule, _ := conf.GetStringOr(KeySocketRule, SocketRulePacket)
+	var headPattern *regexp.Regexp
+	if socketRule == SocketRuleHeadPattern {
+		patternStr, _ := conf.GetStringOr(KeySocketRuleHeadPattern, "*")
+		headPattern, err = regexp.Compile(patternStr)
+		if err != nil {
+			err = fmt.Errorf("head pattern %v compile error %v", patternStr, err)
+			return nil, err
+		}
+	}
 	return &Reader{
 		meta:            meta,
-		status:          reader.StatusInit,
+		status:          StatusInit,
 		readChan:        make(chan socketInfo, 2),
 		errChan:         make(chan error),
 		ServiceAddress:  ServiceAddress,
@@ -366,15 +379,16 @@ func NewReader(meta *reader.Meta, conf conf.MapConf) (reader.Reader, error) {
 		KeepAlivePeriod: KeepAlivePeriodDur,
 		IsSplitByLine:   IsSplitByLine,
 		SocketRule:      socketRule,
+		HeadPattern:     headPattern,
 	}, nil
 }
 
 func (r *Reader) isStopping() bool {
-	return atomic.LoadInt32(&r.status) == reader.StatusStopping
+	return atomic.LoadInt32(&r.status) == StatusStopping
 }
 
 func (r *Reader) hasStopped() bool {
-	return atomic.LoadInt32(&r.status) == reader.StatusStopped
+	return atomic.LoadInt32(&r.status) == StatusStopped
 }
 
 func (r *Reader) Name() string {
@@ -400,7 +414,7 @@ func (r *Reader) sendError(err error) {
 func (r *Reader) Start() error {
 	if r.isStopping() || r.hasStopped() {
 		return errors.New("reader is stopping or has stopped")
-	} else if !atomic.CompareAndSwapInt32(&r.status, reader.StatusInit, reader.StatusRunning) {
+	} else if !atomic.CompareAndSwapInt32(&r.status, StatusInit, StatusRunning) {
 		log.Warnf("Runner[%v] %q daemon has already started and is running", r.meta.RunnerName, r.Name())
 		return nil
 	}
@@ -495,7 +509,7 @@ func (r *Reader) SyncMeta() {
 }
 
 func (r *Reader) Close() error {
-	if !atomic.CompareAndSwapInt32(&r.status, reader.StatusRunning, reader.StatusStopping) {
+	if !atomic.CompareAndSwapInt32(&r.status, StatusRunning, StatusStopping) {
 		log.Warnf("Runner[%v] reader %q is not running, close operation ignored", r.meta.RunnerName, r.Name())
 		return nil
 	}
@@ -509,7 +523,7 @@ func (r *Reader) Close() error {
 		// Make a connection meant to fail but unblock and release the port
 		net.Dial(r.netproto, r.ServiceAddress)
 	}
-	atomic.StoreInt32(&r.status, reader.StatusStopped)
+	atomic.StoreInt32(&r.status, StatusStopped)
 	log.Infof("Runner[%v] %q daemon has stopped from running", r.meta.RunnerName, r.Name())
 	return err
 }

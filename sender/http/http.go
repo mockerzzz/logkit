@@ -11,12 +11,14 @@ import (
 	"time"
 
 	"github.com/json-iterator/go"
+	"github.com/sven0726/fasttemplate"
 
 	"github.com/qiniu/pandora-go-sdk/pipeline"
 
 	"github.com/qiniu/log"
 	"github.com/qiniu/logkit/conf"
 	"github.com/qiniu/logkit/sender"
+	. "github.com/qiniu/logkit/sender/config"
 	. "github.com/qiniu/logkit/utils/models"
 )
 
@@ -28,18 +30,20 @@ type Sender struct {
 	csvHead  bool
 	protocol string
 	csvSplit string
+	template string
 
-	client     *http.Client
-	runnerName string
+	client         *http.Client
+	templateRender *fasttemplate.Template
+	runnerName     string
 }
 
 func init() {
-	sender.RegisterConstructor(sender.TypeHttp, NewSender)
+	sender.RegisterConstructor(TypeHttp, NewSender)
 }
 
 // http sender
 func NewSender(c conf.MapConf) (sender.Sender, error) {
-	url, err := c.GetString(sender.KeyHttpSenderUrl)
+	url, err := c.GetString(KeyHttpSenderUrl)
 	if err != nil {
 		return nil, err
 	}
@@ -47,34 +51,42 @@ func NewSender(c conf.MapConf) (sender.Sender, error) {
 		url = "http://" + url
 	}
 
-	gZip, _ := c.GetBoolOr(sender.KeyHttpSenderGzip, true)
-	csvHead, _ := c.GetBoolOr(sender.KeyHttpSenderCsvHead, true)
-	csvSplit, _ := c.GetStringOr(sender.KeyHttpSenderCsvSplit, "\t")
-	protocol, _ := c.GetStringOr(sender.KeyHttpSenderProtocol, sender.SendProtocolJson)
-	runnerName, _ := c.GetStringOr(KeyRunnerName, sender.UnderfinedRunnerName)
-	timeout, _ := c.GetStringOr(sender.KeyHttpTimeout, "30s")
+	gZip, _ := c.GetBoolOr(KeyHttpSenderGzip, false)
+	templateStr, _ := c.GetStringOr(KeyHttpSenderTemplate, "")
+	csvHead, _ := c.GetBoolOr(KeyHttpSenderCsvHead, true)
+	csvSplit, _ := c.GetStringOr(KeyHttpSenderCsvSplit, "\t")
+	protocol, _ := c.GetStringOr(KeyHttpSenderProtocol, SendProtocolJson)
+	runnerName, _ := c.GetStringOr(KeyRunnerName, UnderfinedRunnerName)
+	timeout, _ := c.GetStringOr(KeyHttpTimeout, "30s")
 	dur, err := time.ParseDuration(timeout)
 	if err != nil {
 		return nil, errors.New("timeout configure " + timeout + " is invalid")
 	}
 	switch protocol {
-	case sender.SendProtocolCSV:
+	case SendProtocolCSV:
 		if csvSplit == "" {
 			csvSplit = "\t"
 		}
-	case sender.SendProtocolJson, sender.SendProtocolWholeJson, sender.SendProtocolRaw:
+	case SendProtocolJson, SendProtocolWholeJson, SendProtocolRaw:
 	default:
 		return nil, fmt.Errorf("runner[%v] create sender error, protocol %v is not support", runnerName, protocol)
 	}
+	var templateRender *fasttemplate.Template
+	_temp := strings.TrimSpace(templateStr)
+	if _temp != "" {
+		templateRender = fasttemplate.New(_temp, "{{", "}}")
+	}
 
 	httpSender := &Sender{
-		url:        url,
-		gZip:       gZip,
-		csvHead:    csvHead,
-		protocol:   protocol,
-		csvSplit:   csvSplit,
-		runnerName: runnerName,
-		client:     &http.Client{Timeout: dur},
+		url:            url,
+		gZip:           gZip,
+		template:       _temp,
+		csvHead:        csvHead,
+		protocol:       protocol,
+		csvSplit:       csvSplit,
+		runnerName:     runnerName,
+		templateRender: templateRender,
+		client:         &http.Client{Timeout: dur},
 	}
 	return httpSender, nil
 }
@@ -86,19 +98,19 @@ func (h *Sender) Name() string {
 func (h *Sender) Send(data []Data) (err error) {
 	var sendBytes []byte
 	switch h.protocol {
-	case sender.SendProtocolJson:
+	case SendProtocolJson:
 		if sendBytes, err = h.convertToJsonBytes(data); err != nil {
 			return err
 		}
-	case sender.SendProtocolCSV:
+	case SendProtocolCSV:
 		if sendBytes, err = h.convertToCsvBytes(data); err != nil {
 			return err
 		}
-	case sender.SendProtocolWholeJson:
-		if sendBytes, err = jsoniter.Marshal(data); err != nil {
+	case SendProtocolWholeJson:
+		if sendBytes, err = h.convertToBodyJsonBytes(data); err != nil {
 			return err
 		}
-	case sender.SendProtocolRaw:
+	case SendProtocolRaw:
 		if sendBytes, err = h.convertToRawBytes(data); err != nil {
 			return err
 		}
@@ -110,6 +122,18 @@ func (h *Sender) Send(data []Data) (err error) {
 
 func (h *Sender) Close() error {
 	return nil
+}
+
+func (h *Sender) renderTemplate(data Data) (string, error) {
+	if h.template != "" && h.templateRender != nil {
+		return h.templateRender.ExecuteString(data), nil
+	} else {
+		db, err := jsoniter.Marshal(data)
+		if err != nil {
+			return "", err
+		}
+		return string(db), nil
+	}
 }
 
 func (h *Sender) convertToRawBytes(datas []Data) ([]byte, error) {
@@ -139,13 +163,24 @@ func (h *Sender) convertToRawBytes(datas []Data) ([]byte, error) {
 func (h *Sender) convertToJsonBytes(datas []Data) (byteData []byte, err error) {
 	dataArray := make([]string, len(datas))
 	for i, data := range datas {
-		db, err := jsoniter.Marshal(data)
+		dataArray[i], err = h.renderTemplate(data)
 		if err != nil {
 			return byteData, err
 		}
-		dataArray[i] = string(db)
 	}
 	byteData = []byte(strings.Join(dataArray, "\n"))
+	return byteData, nil
+}
+
+func (h *Sender) convertToBodyJsonBytes(datas []Data) (byteData []byte, err error) {
+	dataArray := make([]string, len(datas))
+	for i, data := range datas {
+		dataArray[i], err = h.renderTemplate(data)
+		if err != nil {
+			return nil, err
+		}
+	}
+	byteData = []byte("[" + strings.Join(dataArray, ",") + "]")
 	return byteData, nil
 }
 
@@ -201,9 +236,9 @@ func (h *Sender) sendData(byteData []byte) (err error) {
 		return err
 	}
 	switch h.protocol {
-	case sender.SendProtocolJson, sender.SendProtocolWholeJson:
+	case SendProtocolJson, SendProtocolWholeJson:
 		req.Header.Set(ContentTypeHeader, ApplicationJson)
-	case sender.SendProtocolCSV, sender.SendProtocolRaw:
+	case SendProtocolCSV, SendProtocolRaw:
 		req.Header.Set(ContentTypeHeader, TextPlain)
 	default:
 	}

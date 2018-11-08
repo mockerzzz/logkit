@@ -18,14 +18,13 @@ import (
 
 	"github.com/qiniu/logkit/conf"
 	"github.com/qiniu/logkit/queue"
+	. "github.com/qiniu/logkit/sender/config"
 	. "github.com/qiniu/logkit/utils/models"
 	"github.com/qiniu/logkit/utils/reqid"
 )
 
 const (
-	mb                = 1024 * 1024 // 1MB
-	defaultWriteLimit = 10          // 默认写速限制为10MB
-	maxBytesPerFile   = 100 * mb
+	defaultWriteLimit = 10 // 默认写速限制为10MB
 	qNameSuffix       = "_local_save"
 	directSuffix      = "_direct"
 	defaultMaxProcs   = 1         // 默认没有并发
@@ -91,18 +90,20 @@ func NewFtSender(innerSender Sender, conf conf.MapConf, ftSaveLogPath string) (*
 	default:
 		return nil, errors.New("no match ft_strategy")
 	}
-	procs, _ := conf.GetIntOr(KeyFtProcs, defaultMaxProcs)
 	runnerName, _ := conf.GetStringOr(KeyRunnerName, UnderfinedRunnerName)
-	maxDiskUsedBytes, _ := conf.GetInt64Or(KeyMaxDiskUsedBytes, maxDiskUsedBytes)
-	maxSizePerFile, _ := conf.GetInt32Or(KeyMaxSizePerFile, maxBytesPerFile)
+	maxDiskUsedBytes, _ := conf.GetInt64Or(KeyMaxDiskUsedBytes, MaxDiskUsedBytes)
+	maxSizePerFile, _ := conf.GetInt32Or(KeyMaxSizePerFile, MaxBytesPerFile)
 	discardErr, _ := conf.GetBoolOr(KeyFtDiscardErr, false)
+	if MaxProcs <= 0 {
+		MaxProcs = NumCPU
+	}
 
 	opt := &FtOption{
 		saveLogPath:       logPath,
 		syncEvery:         int64(syncEvery),
 		writeLimit:        writeLimit,
 		strategy:          strategy,
-		procs:             procs,
+		procs:             MaxProcs,
 		memoryChannel:     memoryChannel,
 		memoryChannelSize: memoryChannelSize,
 		longDataDiscard:   longDataDiscard,
@@ -133,7 +134,7 @@ func newFtSender(innerSender Sender, runnerName string, opt *FtOption) (*FtSende
 			SyncEveryWrite:   opt.syncEvery,
 			SyncEveryRead:    opt.syncEvery,
 			SyncTimeout:      2 * time.Second,
-			WriteRateLimit:   opt.writeLimit * mb,
+			WriteRateLimit:   opt.writeLimit * MB,
 			MaxDiskUsedBytes: opt.maxDiskUsedBytes,
 		})
 	} else {
@@ -145,7 +146,7 @@ func newFtSender(innerSender Sender, runnerName string, opt *FtOption) (*FtSende
 			SyncEveryWrite:    opt.syncEvery,
 			SyncEveryRead:     opt.syncEvery,
 			SyncTimeout:       2 * time.Second,
-			WriteRateLimit:    opt.writeLimit * mb,
+			WriteRateLimit:    opt.writeLimit * MB,
 			EnableMemoryQueue: true,
 			MemoryQueueSize:   int64(opt.memoryChannelSize),
 			MaxDiskUsedBytes:  opt.maxDiskUsedBytes,
@@ -159,7 +160,7 @@ func newFtSender(innerSender Sender, runnerName string, opt *FtOption) (*FtSende
 		SyncEveryWrite:   opt.syncEvery,
 		SyncEveryRead:    opt.syncEvery,
 		SyncTimeout:      2 * time.Second,
-		WriteRateLimit:   opt.writeLimit * mb,
+		WriteRateLimit:   opt.writeLimit * MB,
 		MaxDiskUsedBytes: opt.maxDiskUsedBytes,
 	})
 	ftSender := FtSender{
@@ -375,7 +376,7 @@ func (ft *FtSender) trySendDatas(datas []Data, failSleep int, isRetry bool) (bac
 	}
 
 	err = ft.handleStat(err, isRetry, dataLen)
-	if err == nil {
+	if empty := isErrorEmpty(err); empty {
 		return nil, nil
 	}
 
@@ -686,4 +687,20 @@ func SplitDataWithSplitSize(data string, splitSize int64) (valArray []string) {
 		valArray = append(valArray, string(dataConverse[end:]))
 	}
 	return valArray
+}
+
+func isErrorEmpty(err error) bool {
+	if err == nil {
+		return true
+	}
+
+	se, succ := err.(*StatsError)
+	if !succ {
+		return false
+	}
+	if se.LastError == "" && se.SendError == nil {
+		return true
+	}
+
+	return false
 }

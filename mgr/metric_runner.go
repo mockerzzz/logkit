@@ -17,7 +17,9 @@ import (
 	"github.com/qiniu/logkit/metric"
 	"github.com/qiniu/logkit/metric/curl"
 	"github.com/qiniu/logkit/reader"
+	. "github.com/qiniu/logkit/reader/config"
 	"github.com/qiniu/logkit/sender"
+	senderConf "github.com/qiniu/logkit/sender/config"
 	"github.com/qiniu/logkit/transforms"
 	. "github.com/qiniu/logkit/utils/models"
 )
@@ -43,6 +45,7 @@ type MetricRunner struct {
 	collectors   []metric.Collector
 	senders      []sender.Sender
 	transformers map[string][]transforms.Transformer
+	commonTrans  []transforms.Transformer
 
 	collectInterval time.Duration
 	rs              *RunnerStatus
@@ -65,11 +68,14 @@ func NewMetricRunner(rc RunnerConfig, sr *sender.Registry) (runner *MetricRunner
 	if rc.CollectInterval <= 0 {
 		rc.CollectInterval = defaultCollectInterval
 	}
+	if len(rc.MetricConfig) == 0 {
+		return nil, errors.New("Runner " + rc.RunnerName + " has no metric, ignore it")
+	}
 	interval := time.Duration(rc.CollectInterval) * time.Second
 	cf := conf.MapConf{
-		GlobalKeyName:  rc.RunnerName,
-		KeyRunnerName:  rc.RunnerName,
-		reader.KeyMode: reader.ModeMetrics,
+		GlobalKeyName: rc.RunnerName,
+		KeyRunnerName: rc.RunnerName,
+		KeyMode:       reader.ModeMetrics,
 	}
 	if rc.ExtraInfo {
 		cf[ExtraInfo] = Bool2String(rc.ExtraInfo)
@@ -83,9 +89,7 @@ func NewMetricRunner(rc RunnerConfig, sr *sender.Registry) (runner *MetricRunner
 	}
 	collectors := make([]metric.Collector, 0)
 	transformers := make(map[string][]transforms.Transformer)
-	if len(rc.MetricConfig) == 0 {
-		return nil, errors.New("Runner " + rc.RunnerName + " has zero metric, ignore it")
-	}
+
 	for _, m := range rc.MetricConfig {
 		tp := m.MetricType
 		c, err := NewMetric(tp)
@@ -164,17 +168,22 @@ func NewMetricRunner(rc RunnerConfig, sr *sender.Registry) (runner *MetricRunner
 		return
 	}
 
+	commonTransformers, err := createTransformers(rc)
+	if err != nil {
+		return nil, err
+	}
+
 	senders := make([]sender.Sender, 0)
 	for _, senderConfig := range rc.SendersConfig {
-		senderConfig[sender.KeyIsMetrics] = "true"
-		senderConfig[sender.KeyPandoraTSDBTimeStamp] = metric.Timestamp
-		if senderConfig[sender.KeySenderType] == sender.TypePandora {
+		senderConfig[senderConf.KeyIsMetrics] = "true"
+		senderConfig[senderConf.KeyPandoraTSDBTimeStamp] = metric.Timestamp
+		if senderConfig[senderConf.KeySenderType] == senderConf.TypePandora {
 			if rc.ExtraInfo {
 				//如果已经开启了，不要重复加
-				senderConfig[sender.KeyPandoraExtraInfo] = "false"
+				senderConfig[senderConf.KeyPandoraExtraInfo] = "false"
 			}
-			if senderConfig[sender.KeyPandoraDescription] == "" {
-				senderConfig[sender.KeyPandoraDescription] = MetricAutoCreateDescription
+			if senderConfig[senderConf.KeyPandoraDescription] == "" {
+				senderConfig[senderConf.KeyPandoraDescription] = MetricAutoCreateDescription
 			}
 		}
 		s, err := sr.NewSender(senderConfig, meta.FtSaveLogPath())
@@ -207,6 +216,7 @@ func NewMetricRunner(rc RunnerConfig, sr *sender.Registry) (runner *MetricRunner
 		collectInterval: interval,
 		collectors:      collectors,
 		transformers:    transformers,
+		commonTrans:     commonTransformers,
 		senders:         senders,
 		envTag:          rc.EnvTag,
 	}
@@ -267,6 +277,12 @@ func (r *MetricRunner) Run() {
 					if err != nil {
 						log.Error(err)
 					}
+				}
+			}
+			for _, t := range r.commonTrans {
+				tmpDatas, err = t.Transform(tmpDatas)
+				if err != nil {
+					log.Error(err)
 				}
 			}
 			for _, metricData := range tmpDatas {

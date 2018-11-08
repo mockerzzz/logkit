@@ -5,13 +5,13 @@ import (
 	"os"
 
 	"github.com/json-iterator/go"
-	"github.com/qiniu/logkit/reader"
+	"github.com/qiniu/logkit/reader/config"
 	"github.com/stretchr/testify/assert"
 )
 
 type respReaderRet struct {
-	Code string `json:"code"`
-	Data string `json:"data"`
+	Code string   `json:"code"`
+	Data []string `json:"data"`
 }
 
 // Rest 测试 端口容易冲突导致混淆，61xx
@@ -27,7 +27,7 @@ func readerAPITest(p *testParam) {
 	if err = jsoniter.Unmarshal(respBody, &got1); err != nil {
 		t.Fatalf("respBody %v unmarshal failed, error is %v", respBody, err)
 	}
-	assert.Equal(t, reader.ModeUsages, got1.Data)
+	assert.Equal(t, config.ModeUsages, got1.Data)
 
 	var got2 respModeKeyOptions
 	url = "http://127.0.0.1" + rs.address + "/logkit/reader/options"
@@ -37,7 +37,7 @@ func readerAPITest(p *testParam) {
 	if err = jsoniter.Unmarshal(respBody, &got2); err != nil {
 		t.Fatalf("respBody %v unmarshal failed, error is %v", respBody, err)
 	}
-	assert.Equal(t, reader.ModeKeyOptions, got2.Data)
+	assert.Equal(t, config.ModeKeyOptions, got2.Data)
 
 	var got3 respReaderRet
 	readerConfig := `{
@@ -45,7 +45,8 @@ func readerAPITest(p *testParam) {
 		"meta_path":"./readerAPITest1/meta_req_csv",
 		"mode":"dir",
 		"read_from":"oldest",
-		"ignore_hidden":"true"
+		"ignore_hidden":"true",
+		"raw_data_lines":"1"
 	}`
 	logfile := "./readerAPITest/logdir/log1"
 	logdir := "./readerAPITest/logdir"
@@ -69,7 +70,7 @@ func readerAPITest(p *testParam) {
 	if err = jsoniter.Unmarshal(respBody, &got3); err != nil {
 		t.Fatalf("respBody %v unmarshal failed, error is %v", respBody, err)
 	}
-	expect := "abc\n"
+	expect := []string{"abc\n"}
 	assert.Equal(t, expect, got3.Data)
 
 	// Test reader/check with date transformer
@@ -91,5 +92,5 @@ func readerAPITest(p *testParam) {
 	if err = jsoniter.Unmarshal(respBody, &got5); err != nil {
 		t.Fatalf("respBody %v unmarshal failed, error is %v", respBody, err)
 	}
-	assert.Equal(t, reader.ModeToolTips, got5.Data)
+	assert.Equal(t, config.ModeToolTips, got5.Data)
 }

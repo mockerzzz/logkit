@@ -15,6 +15,7 @@ import (
 
 	"github.com/qiniu/logkit/conf"
 	"github.com/qiniu/logkit/sender"
+	. "github.com/qiniu/logkit/sender/config"
 	. "github.com/qiniu/logkit/utils/models"
 )
 
@@ -32,32 +33,32 @@ type Sender struct {
 
 var (
 	compressionModes = map[string]sarama.CompressionCodec{
-		sender.KeyKafkaCompressionNone:   sarama.CompressionNone,
-		sender.KeyKafkaCompressionGzip:   sarama.CompressionGZIP,
-		sender.KeyKafkaCompressionSnappy: sarama.CompressionSnappy,
-		sender.KeyKafkaCompressionLZ4:    sarama.CompressionLZ4,
+		KeyKafkaCompressionNone:   sarama.CompressionNone,
+		KeyKafkaCompressionGzip:   sarama.CompressionGZIP,
+		KeyKafkaCompressionSnappy: sarama.CompressionSnappy,
+		KeyKafkaCompressionLZ4:    sarama.CompressionLZ4,
 	}
 
 	compressionLevelModes = map[string]int{
-		sender.KeyGZIPCompressionNo:              gzip.NoCompression,
-		sender.KeyGZIPCompressionBestSpeed:       gzip.BestSpeed,
-		sender.KeyGZIPCompressionBestCompression: gzip.BestCompression,
-		sender.KeyGZIPCompressionDefault:         gzip.DefaultCompression,
-		sender.KeyGZIPCompressionHuffmanOnly:     gzip.HuffmanOnly,
+		KeyGZIPCompressionNo:              gzip.NoCompression,
+		KeyGZIPCompressionBestSpeed:       gzip.BestSpeed,
+		KeyGZIPCompressionBestCompression: gzip.BestCompression,
+		KeyGZIPCompressionDefault:         gzip.DefaultCompression,
+		KeyGZIPCompressionHuffmanOnly:     gzip.HuffmanOnly,
 	}
 )
 
 func init() {
-	sender.RegisterConstructor(sender.TypeKafka, NewSender)
+	sender.RegisterConstructor(TypeKafka, NewSender)
 }
 
 // kafka sender
 func NewSender(conf conf.MapConf) (kafkaSender sender.Sender, err error) {
-	hosts, err := conf.GetStringList(sender.KeyKafkaHost)
+	hosts, err := conf.GetStringList(KeyKafkaHost)
 	if err != nil {
 		return
 	}
-	topic, err := conf.GetStringList(sender.KeyKafkaTopic)
+	topic, err := conf.GetStringList(KeyKafkaTopic)
 	if err != nil {
 		return
 	}
@@ -70,17 +71,17 @@ func NewSender(conf conf.MapConf) (kafkaSender sender.Sender, err error) {
 		hostName = "getHostnameErr:" + err.Error()
 		err = nil
 	}
-	clientID, _ := conf.GetStringOr(sender.KeyKafkaClientId, hostName)
+	clientID, _ := conf.GetStringOr(KeyKafkaClientId, hostName)
 	//num, _ := conf.GetIntOr(KeyKafkaFlushNum, 200)
 	//frequency, _ := conf.GetIntOr(KeyKafkaFlushFrequency, 5)
-	retryMax, _ := conf.GetIntOr(sender.KeyKafkaRetryMax, 3)
-	compression, _ := conf.GetStringOr(sender.KeyKafkaCompression, sender.KeyKafkaCompressionNone)
-	timeout, _ := conf.GetStringOr(sender.KeyKafkaTimeout, "30s")
-	keepAlive, _ := conf.GetStringOr(sender.KeyKafkaKeepAlive, "0")
-	maxMessageBytes, _ := conf.GetIntOr(sender.KeyMaxMessageBytes, 4*1024*1024)
-	gzipCompressionLevel, _ := conf.GetStringOr(sender.KeyGZIPCompressionLevel, sender.KeyGZIPCompressionDefault)
+	retryMax, _ := conf.GetIntOr(KeyKafkaRetryMax, 3)
+	compression, _ := conf.GetStringOr(KeyKafkaCompression, KeyKafkaCompressionNone)
+	timeout, _ := conf.GetStringOr(KeyKafkaTimeout, "30s")
+	keepAlive, _ := conf.GetStringOr(KeyKafkaKeepAlive, "0")
+	maxMessageBytes, _ := conf.GetIntOr(KeyMaxMessageBytes, 4*1024*1024)
+	gzipCompressionLevel, _ := conf.GetStringOr(KeyGZIPCompressionLevel, KeyGZIPCompressionDefault)
 
-	name, _ := conf.GetStringOr(sender.KeyName, fmt.Sprintf("kafkaSender:(kafkaUrl:%s,topic:%s)", hosts, topic))
+	name, _ := conf.GetStringOr(KeyName, fmt.Sprintf("kafkaSender:(kafkaUrl:%s,topic:%s)", hosts, topic))
 	cfg := sarama.NewConfig()
 	cfg.Producer.Return.Successes = true
 	cfg.Producer.Return.Errors = true
@@ -148,6 +149,7 @@ func (this *Sender) Send(data []Data) error {
 		statsError      = &StatsError{}
 		statsLastError  string
 		ignoreDataCount int
+		failedDatas     = make([]map[string]interface{}, 0)
 	)
 	for _, doc := range data {
 		message, err := this.getEventMessage(doc)
@@ -155,19 +157,21 @@ func (this *Sender) Send(data []Data) error {
 			log.Debugf("Dropping event: %v", err)
 			statsError.AddErrors()
 			statsError.LastError = err.Error()
+			failedDatas = append(failedDatas, doc)
 			ignoreDataCount++
 			continue
 		}
 		msgs = append(msgs, message)
 	}
+	if statsError.LastError != "" {
+		statsError.LastError = fmt.Sprintf("ignore %d datas, last error: %s", ignoreDataCount, statsError.LastError) + "\n"
+	}
+
 	err := producer.SendMessages(msgs)
 	if err != nil {
 		statsError.AddErrorsNum(len(msgs))
 		pde, ok := err.(sarama.ProducerErrors)
 		if !ok {
-			if statsError.LastError != "" {
-				statsError.LastError = fmt.Sprintf("ignore %d datas, last error: %s", ignoreDataCount, statsError.LastError) + "\n"
-			}
 			statsError.LastError += err.Error()
 			return statsError
 		}
@@ -191,16 +195,24 @@ func (this *Sender) Send(data []Data) error {
 		if allcir {
 			statsLastError = fmt.Sprintf("%v, all error is circuit breaker is open", err)
 		}
-		if statsError.LastError != "" {
-			statsError.LastError = fmt.Sprintf("ignore %d datas, last error: %s", ignoreDataCount, statsError.LastError) + "\n"
-		}
 		statsError.LastError += statsLastError
 		return statsError
 	}
+
 	statsError.AddSuccessNum(len(msgs))
 	//本次发送成功, lastError 置为 nil
 	this.lastError = nil
-	return statsError
+
+	if statsError.Errors > 0 {
+		statsError.SendError = reqerr.NewSendError(
+			fmt.Sprintf("bulk failed with last error: %s", statsError.LastError),
+			failedDatas,
+			reqerr.TypeDefault,
+		)
+		return statsError
+	}
+
+	return nil
 }
 
 func (kf *Sender) getEventMessage(event map[string]interface{}) (pm *sarama.ProducerMessage, err error) {
